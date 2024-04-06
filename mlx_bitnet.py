@@ -21,12 +21,12 @@
 
 import math
 import warnings
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import mlx.core as mx
 import mlx.nn as nn
 
-from transformers.activations import silu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -43,8 +43,8 @@ class MinimalBitnetConfig:
     # architectures: list = ("BitnetForCausalLM",)
     attention_bias: bool = False
     # attention_dropout: float = 0.0
-    # bos_token_id: int = 1
-    # eos_token_id: int = 2
+    bos_token_id: int = 1
+    eos_token_id: int = 2
     # hidden_act: str = "silu"
     hidden_size: int = 2048
     # initializer_range: float = 0.02
@@ -67,6 +67,22 @@ class MinimalBitnetConfig:
     # vocab_size: int = 32002
     weight_bits: int = 1
     # attn_implementation: str = "eager"
+
+
+def sanitize_config(_config: BitnetConfig) -> MinimalBitnetConfig:
+    return MinimalBitnetConfig(
+        attention_bias=_config.attention_bias,
+        hidden_size=_config.hidden_size,
+        input_bits=_config.input_bits,
+        intermediate_size=_config.intermediate_size,
+        max_position_embeddings=_config.max_position_embeddings,
+        num_attention_heads=_config.num_attention_heads,
+        num_key_value_heads=_config.num_key_value_heads,
+        pad_token_id=_config.pad_token_id,
+        rms_norm_eps=_config.rms_norm_eps,
+        rope_theta=_config.rope_theta,
+        weight_bits=_config.weight_bits,
+    )
 
 def clamp(arr, min=None, max=None):
     if not min:
@@ -114,9 +130,8 @@ class BitLinear(nn.Linear):
         quant_weight = self.weight + (weight_quant(self.weight, self.weight_bits) - self.weight)
 
         out = quant_input @ quant_weight.T
-        # out = nn.functional.linear(quant_input, quant_weight)
-        # if not self.bias is None:
-        #     out += self.bias.view(1, -1).expand_as(out)
+        if hasattr(self, 'bias') and self.bias is not None:
+            out += mx.broadcast_to(self.bias.reshape((1, -1)), out.shape)
 
         return out
 
@@ -178,25 +193,24 @@ class BitnetRotaryEmbedding(nn.Module):
 
     def forward(self, x, position_ids):
         # x: [bs, num_attention_heads, seq_len, head_size]
-        inv_freq_expanded = self.inv_freq[None, :, None].astype(mx.float32).expand(position_ids.shape[0], -1, 1)
+        inv_freq = self.inv_freq[None, :, None].astype(mx.float32)
+        inv_freq_expanded = mx.broadcast_to(inv_freq, (position_ids.shape[0], inv_freq.shape[1], 1))
         position_ids_expanded = position_ids[:, None, :].astype(mx.float32)
         # Force float32 since bfloat16 loses precision on long contexts
         # See https://github.com/huggingface/transformers/pull/29285
-        device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-        with mx.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = mx.concatenate((freqs, freqs), dim=-1)
-            cos = emb.cos()
-            sin = emb.sin()
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+        intermediate = (inv_freq_expanded.astype(mx.float32) @ position_ids_expanded.astype(mx.float32))
+        freqs = (inv_freq_expanded.astype(mx.float32) @ position_ids_expanded.astype(mx.float32)).transpose((0, 2, 1))
+        emb = mx.concatenate([freqs, freqs], axis=-1)
+        cos = emb.cos()
+        sin = emb.sin()
+        return cos.astype(x.dtype), sin.astype(x.dtype)
 
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
-    return mx.concatenate((-x2, x1), dim=-1)
+    return mx.concatenate([-x2, x1], axis=-1)
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
@@ -219,8 +233,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(mx.array)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
+    cos = mx.expand_dims(cos, axis=unsqueeze_dim)
+    sin = mx.expand_dims(sin, axis=unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -243,13 +257,13 @@ class BitnetMLP(nn.Module):
             self.intermediate_size, self.hidden_size, bias=False, 
             weight_bits=config.weight_bits, input_bits=config.input_bits, 
         )
-        self.act_fn = silu
+        self.act_fn = nn.silu
         self.ffn_layernorm = BitnetRMSNorm(self.intermediate_size, eps=config.rms_norm_eps)
 
     def forward(self, x):
-        x = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
-        x = self.ffn_layernorm(x)
-        x = self.down_proj(x)
+        x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
+        x = self.ffn_layernorm.forward(x)
+        x = self.down_proj.forward(x)
         return x
 
 
@@ -261,24 +275,11 @@ def repeat_kv(hidden_states: mx.array, n_rep: int) -> mx.array:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    hidden_states = mx.expand_dims(hidden_states, axis=2)
+    hidden_states = mx.broadcast_to(hidden_states, shape=(batch, num_key_value_heads, n_rep, slen, head_dim))
+    hidden_states = hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    return hidden_states
 
-
-def sanitise_config(_config: BitnetConfig) -> MinimalBitnetConfig:
-    return MinimalBitnetConfig(
-        attention_bias=_config.attention_bias,
-        hidden_size=_config.hidden_size,
-        input_bits=_config.input_bits,
-        intermediate_size=_config.intermediate_size,
-        max_position_embeddings=_config.max_position_embeddings,
-        num_attention_heads=_config.num_attention_heads,
-        num_key_value_heads=_config.num_key_value_heads,
-        pad_token_id=_config.pad_token_id,
-        rms_norm_eps=_config.rms_norm_eps,
-        rope_theta=_config.rope_theta,
-        weight_bits=_config.weight_bits,
-    )
 
 class BitnetAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -344,18 +345,18 @@ class BitnetAttention(nn.Module):
         cache_position: Optional[mx.array] = None,
         **kwargs,
     ) -> Tuple[mx.array, Optional[mx.array], Optional[Tuple[mx.array]]]:
-        bsz, q_len, _ = hidden_states.size()
+        bsz, q_len, _ = hidden_states.shape
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        query_states = self.q_proj.forward(hidden_states)
+        key_states = self.k_proj.forward(hidden_states)
+        value_states = self.v_proj.forward(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.reshape(bsz, q_len, self.num_heads, self.head_dim).swapaxes(1, 2)
+        key_states = key_states.reshape(bsz, q_len, self.num_key_value_heads, self.head_dim).swapaxes(1, 2)
+        value_states = value_states.reshape(bsz, q_len, self.num_key_value_heads, self.head_dim).swapaxes(1, 2)
 
         past_key_value = getattr(self, "past_key_value", past_key_value)
-        cos, sin = self.rotary_emb(value_states, position_ids)
+        cos, sin = self.rotary_emb.forward(value_states, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
@@ -370,28 +371,29 @@ class BitnetAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = mx.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = mx.matmul(query_states, key_states.swapaxes(2, 3)) / math.sqrt(self.head_dim)
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=mx.float32).to(query_states.dtype)
+        attn_weights = nn.softmax(attn_weights, axis=-1).astype(query_states.dtype)
         attn_output = mx.matmul(attn_weights, value_states)
 
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+        if attn_output.shape != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
+                f"`attn_output` should be of shape {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f" {attn_output.shape}"
             )
 
-        attn_output = attn_output.transpose(1, 2).contiguous()
+        # attn_output = attn_output.swapaxes(1, 2).contiguous()
+        attn_output = attn_output.swapaxes(1, 2)
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = self.inner_attn_ln(attn_output)
-        attn_output = self.o_proj(attn_output)
+        attn_output = self.inner_attn_ln.forward(attn_output)
+        attn_output = self.o_proj.forward(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -570,7 +572,7 @@ class BitnetModel(BitnetPreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            layer_outputs = decoder_layer(
+            layer_outputs = decoder_layer.forward(
                 hidden_states,
                 attention_mask=causal_mask,
                 position_ids=position_ids,

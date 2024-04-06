@@ -34,40 +34,6 @@ from transformers.modeling_outputs import (
 )
 from configuration_bitnet import BitnetConfig
 
-
-from dataclasses import dataclass
-
-@dataclass
-class MinimalBitnetConfig:
-    # _name_or_path: str = "1bitLLM/bitnet_b1_58-xl"
-    # architectures: list = ("BitnetForCausalLM",)
-    attention_bias: bool = False
-    # attention_dropout: float = 0.0
-    # bos_token_id: int = 1
-    # eos_token_id: int = 2
-    # hidden_act: str = "silu"
-    hidden_size: int = 2048
-    # initializer_range: float = 0.02
-    input_bits: int = 8
-    intermediate_size: int = 5460
-    max_position_embeddings: int = 2048
-    # model_type: str = "llama"
-    num_attention_heads: int = 32
-    # num_hidden_layers: int = 24
-    num_key_value_heads: int = 32
-    pad_token_id: int = 32000
-    # pretraining_tp: int = 1
-    rms_norm_eps: float = 1e-05
-    # rope_scaling: None = None
-    rope_theta: float = 10000.0
-    # tie_word_embeddings: bool = True
-    # torch_dtype: str = "float16"
-    # transformers_version: str = "4.39.0"
-    # use_cache: bool = True
-    # vocab_size: int = 32002
-    weight_bits: int = 1
-    # attn_implementation: str = "eager"
-
 def weight_quant(weight, num_bits=1):
     dtype = weight.dtype
     weight = weight.float()
@@ -256,25 +222,10 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
-def sanitise_config(_config: BitnetConfig) -> MinimalBitnetConfig:
-    return MinimalBitnetConfig(
-        attention_bias=_config.attention_bias,
-        hidden_size=_config.hidden_size,
-        input_bits=_config.input_bits,
-        intermediate_size=_config.intermediate_size,
-        max_position_embeddings=_config.max_position_embeddings,
-        num_attention_heads=_config.num_attention_heads,
-        num_key_value_heads=_config.num_key_value_heads,
-        pad_token_id=_config.pad_token_id,
-        rms_norm_eps=_config.rms_norm_eps,
-        rope_theta=_config.rope_theta,
-        weight_bits=_config.weight_bits,
-    )
-
 class BitnetAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: MinimalBitnetConfig, layer_idx: Optional[int] = None):
+    def __init__(self, config: BitnetConfig, layer_idx: Optional[int] = None):
         super().__init__()
         self.layer_idx = layer_idx
         if layer_idx is None:
@@ -394,7 +345,7 @@ class BitnetAttention(nn.Module):
 
 
 class BitnetDecoderLayer(nn.Module):
-    def __init__(self, config: MinimalBitnetConfig, layer_idx: int):
+    def __init__(self, config: BitnetConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
 
@@ -490,7 +441,7 @@ class BitnetModel(BitnetPreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [BitnetDecoderLayer(sanitise_config(config), layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [BitnetDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = BitnetRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
