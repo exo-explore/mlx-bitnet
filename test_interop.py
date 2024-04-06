@@ -10,11 +10,16 @@ from mlx_bitnet import BitnetRotaryEmbedding as MLXBitnetRotaryEmbedding
 from mlx_bitnet import BitnetMLP as MLXBitnetMLP
 from mlx_bitnet import BitnetAttention as MLXBitnetAttention
 from mlx_bitnet import MinimalBitnetConfig
+from mlx_bitnet import BitnetDecoderLayer as MLXBitnetDecoderLayer
+from mlx_bitnet import load_model
+from mlx_bitnet import BitnetModel as MLXBitnetModel
 from minimal_bitnet import BitLinear as TorchBitLinear
 from minimal_bitnet import BitnetRMSNorm as TorchBitnetRMSNorm
 from minimal_bitnet import BitnetRotaryEmbedding as TorchBitnetRotaryEmbedding
 from minimal_bitnet import BitnetMLP as TorchBitnetMLP
 from minimal_bitnet import BitnetAttention as TorchBitnetAttention
+from minimal_bitnet import BitnetModel as TorchBitnetModel
+from minimal_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
 from transformers.activations import silu as torch_silu
 
 class TestBitLinearInterop(unittest.TestCase):
@@ -196,6 +201,7 @@ class TestSiluInterop(unittest.TestCase):
 
         # Check if the results are close enough
         self.assertTrue(torch.allclose(torch_silu_result, mlx_silu_result_torch, atol=1e-6), "SiLU results do not match.")
+
 class TestBitnetAttentionInterop(unittest.TestCase):
     def setUp(self):
         self.config = MinimalBitnetConfig(
@@ -258,6 +264,138 @@ class TestBitnetAttentionInterop(unittest.TestCase):
         # Check if the outputs are close enough
         self.assertTrue(torch.allclose(torch_output, torch.tensor(np.array(mlx_output)), atol=1e-4), "Attention outputs do not match.")
 
+    @unittest.skip("skip this test normally because its slow")
+    def test_model_loading_comparison(self):
+        model_name = "1bitLLM/bitnet_b1_58-large"
+        torch_model = TorchBitnetModel.from_pretrained(model_name)
+        mlx_model, _ = load_model(model_name)
+
+        torch_embed_tokens_weight = torch_model.embed_tokens.weight.cpu().detach().numpy()
+        mlx_embed_tokens_weight = np.array(mlx_model.embed_tokens.weight)
+        self.assertTrue(np.allclose(torch_embed_tokens_weight, mlx_embed_tokens_weight, atol=1e-6), "Embed tokens weights do not match.")
+
+        for layer_index in range(len(torch_model.layers)):
+            torch_layer = torch_model.layers[layer_index]
+            mlx_layer = mlx_model.layers[layer_index]
+
+            # Check MLP up_proj weights
+            torch_up_proj_weight = torch_layer.mlp.up_proj.weight.cpu().detach().numpy()
+            mlx_up_proj_weight = np.array(mlx_layer.mlp.up_proj.weight)
+            self.assertTrue(np.allclose(torch_up_proj_weight, mlx_up_proj_weight, atol=1e-6), f"Layer {layer_index} MLP up_proj weights do not match.")
+
+            # Check MLP down_proj weights
+            torch_down_proj_weight = torch_layer.mlp.down_proj.weight.cpu().detach().numpy()
+            mlx_down_proj_weight = np.array(mlx_layer.mlp.down_proj.weight)
+            self.assertTrue(np.allclose(torch_down_proj_weight, mlx_down_proj_weight, atol=1e-6), f"Layer {layer_index} MLP down_proj weights do not match.")
+
+            # Check self attention q_proj weights
+            torch_q_proj_weight = torch_layer.self_attn.q_proj.weight.cpu().detach().numpy()
+            mlx_q_proj_weight = np.array(mlx_layer.self_attn.q_proj.weight)
+            self.assertTrue(np.allclose(torch_q_proj_weight, mlx_q_proj_weight, atol=1e-6), f"Layer {layer_index} self attention q_proj weights do not match.")
+
+            # Check self attention k_proj weights
+            torch_k_proj_weight = torch_layer.self_attn.k_proj.weight.cpu().detach().numpy()
+            mlx_k_proj_weight = np.array(mlx_layer.self_attn.k_proj.weight)
+            self.assertTrue(np.allclose(torch_k_proj_weight, mlx_k_proj_weight, atol=1e-6), f"Layer {layer_index} self attention k_proj weights do not match.")
+
+            # Check self attention v_proj weights
+            torch_v_proj_weight = torch_layer.self_attn.v_proj.weight.cpu().detach().numpy()
+            mlx_v_proj_weight = np.array(mlx_layer.self_attn.v_proj.weight)
+            self.assertTrue(np.allclose(torch_v_proj_weight, mlx_v_proj_weight, atol=1e-6), f"Layer {layer_index} self attention v_proj weights do not match.")
+
+            # Check self attention o_proj weights
+            torch_o_proj_weight = torch_layer.self_attn.o_proj.weight.cpu().detach().numpy()
+            mlx_o_proj_weight = np.array(mlx_layer.self_attn.o_proj.weight)
+            self.assertTrue(np.allclose(torch_o_proj_weight, mlx_o_proj_weight, atol=1e-6), f"Layer {layer_index} self attention o_proj weights do not match.")
+
+    def test_bitnet_decoder_layer_interop(self):
+        layer_norm_eps = 1e-6
+
+        # Initialize MLXBitnetDecoderLayer
+        config = MinimalBitnetConfig(
+            hidden_size=2048,
+            num_attention_heads=32,
+            num_key_value_heads=32,
+            rms_norm_eps=layer_norm_eps,
+        )
+        mlx_decoder_layer = MLXBitnetDecoderLayer(config=config, layer_idx=0)
+        # Initialize TorchBitnetDecoderLayer
+        torch_decoder_layer = TorchBitnetDecoderLayer(config=config, layer_idx=0).cpu()
+
+        # Load weights and biases (if they exist) from MLX layer to Torch layer for comparison
+        torch_decoder_layer.self_attn.q_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.q_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.self_attn.q_proj, 'bias') and mlx_decoder_layer.self_attn.q_proj.bias is not None:
+            torch_decoder_layer.self_attn.q_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.q_proj.bias)).float().cpu())
+
+        torch_decoder_layer.self_attn.k_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.k_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.self_attn.k_proj, 'bias') and mlx_decoder_layer.self_attn.k_proj.bias is not None:
+            torch_decoder_layer.self_attn.k_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.k_proj.bias)).float().cpu())
+
+        torch_decoder_layer.self_attn.v_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.v_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.self_attn.v_proj, 'bias') and mlx_decoder_layer.self_attn.v_proj.bias is not None:
+            torch_decoder_layer.self_attn.v_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.v_proj.bias)).float().cpu())
+
+        torch_decoder_layer.self_attn.o_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.o_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.self_attn.o_proj, 'bias') and mlx_decoder_layer.self_attn.o_proj.bias is not None:
+            torch_decoder_layer.self_attn.o_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.self_attn.o_proj.bias)).float().cpu())
+
+        torch_decoder_layer.mlp.gate_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.gate_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.mlp.gate_proj, 'bias') and mlx_decoder_layer.mlp.gate_proj.bias is not None:
+            torch_decoder_layer.mlp.gate_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.gate_proj.bias)).float().cpu())
+
+        torch_decoder_layer.mlp.up_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.up_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.mlp.up_proj, 'bias') and mlx_decoder_layer.mlp.up_proj.bias is not None:
+            torch_decoder_layer.mlp.up_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.up_proj.bias)).float().cpu())
+
+        torch_decoder_layer.mlp.down_proj.weight = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.down_proj.weight)).float().cpu())
+        if hasattr(mlx_decoder_layer.mlp.down_proj, 'bias') and mlx_decoder_layer.mlp.down_proj.bias is not None:
+            torch_decoder_layer.mlp.down_proj.bias = torch.nn.Parameter(torch.tensor(np.array(mlx_decoder_layer.mlp.down_proj.bias)).float().cpu())
+
+
+        # Prepare input tensors
+        input_tensor = mx.random.uniform(shape=(2, 50, 2048))
+        torch_input_tensor = torch.tensor(np.array(input_tensor)).float().cpu()
+
+        # Prepare attention mask
+        attention_mask = mx.random.uniform(shape=(2, 1, 50, 50))
+        torch_attention_mask = torch.tensor(np.array(attention_mask)).float().cpu()
+
+        # Prepare position ids
+        position_ids = mx.broadcast_to(mx.expand_dims(mx.arange(50), axis=0), (2, 50))
+        torch_position_ids = torch.tensor(np.array(position_ids)).long().cpu()
+
+        # Forward pass
+        mlx_output = mlx_decoder_layer.forward(input_tensor, attention_mask=attention_mask, position_ids=position_ids)
+        torch_output = torch_decoder_layer.forward(torch_input_tensor, attention_mask=torch_attention_mask, position_ids=torch_position_ids)
+
+        # Check if the outputs are close enough
+        self.assertTrue(torch.allclose(torch.tensor(np.array(mlx_output)), torch_output[0].detach(), atol=0.05), "Decoder layer outputs do not match.")
+
+
+    @unittest.skip("skip this test normally because its slow")
+    def test_model_inference_comparison(self):
+        model_name = "1bitLLM/bitnet_b1_58-large"
+        torch_model = TorchBitnetModel.from_pretrained(model_name)
+        mlx_model, _ = load_model(model_name)
+
+        # Prepare input
+        input_ids = torch.tensor([[101, 102, 103, 104]])
+        attention_mask = torch.tensor([[1, 1, 1, 1]])
+
+        # Torch model inference
+        with torch.no_grad():
+            torch_output = torch_model(input_ids, attention_mask=attention_mask)
+
+        # MLX model inference
+        mlx_input_ids = mx.array(input_ids.numpy())
+        mlx_attention_mask = mx.array(attention_mask.numpy())
+        mlx_output = mlx_model.forward(mlx_input_ids, attention_mask=mlx_attention_mask)
+
+        print("torch_output", torch_output)
+        print("mlx_output", mlx_output)
+
+        # Check if the outputs are close enough
+        self.assertTrue(torch.allclose(torch_output[0], torch.tensor(np.array(mlx_output[0])), atol=1e-4), "Model inferences do not match.")
 
 
 

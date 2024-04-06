@@ -399,6 +399,7 @@ class BitnetDecoderLayer(nn.Module):
             cache_position=cache_position,
             **kwargs,
         )
+        print("[torch] hidden_states_2", hidden_states)
         hidden_states = residual + hidden_states
 
         # Fully Connected
