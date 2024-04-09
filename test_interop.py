@@ -15,14 +15,14 @@ from mlx_bitnet import load_model, load_causal_model
 from mlx_bitnet import BitnetModel as MLXBitnetModel
 from mlx_bitnet import BitnetForCausalLM as MLXBitnetForCausalLM
 from mlx_bitnet import BitnetTokenizer
-from minimal_bitnet import BitLinear as TorchBitLinear
-from minimal_bitnet import BitnetRMSNorm as TorchBitnetRMSNorm
-from minimal_bitnet import BitnetRotaryEmbedding as TorchBitnetRotaryEmbedding
-from minimal_bitnet import BitnetMLP as TorchBitnetMLP
-from minimal_bitnet import BitnetAttention as TorchBitnetAttention
-from minimal_bitnet import BitnetModel as TorchBitnetModel
-from minimal_bitnet import BitnetForCausalLM as TorchBitnetForCausalLM
-from minimal_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
+from torch_bitnet import BitLinear as TorchBitLinear
+from torch_bitnet import BitnetRMSNorm as TorchBitnetRMSNorm
+from torch_bitnet import BitnetRotaryEmbedding as TorchBitnetRotaryEmbedding
+from torch_bitnet import BitnetMLP as TorchBitnetMLP
+from torch_bitnet import BitnetAttention as TorchBitnetAttention
+from torch_bitnet import BitnetModel as TorchBitnetModel
+from torch_bitnet import BitnetForCausalLM as TorchBitnetForCausalLM
+from torch_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
 from transformers.activations import silu as torch_silu
 
 class TestBitLinearInterop(unittest.TestCase):
