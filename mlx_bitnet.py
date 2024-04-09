@@ -82,25 +82,6 @@ class MinimalBitnetConfig:
     use_return_dict: bool = True
 
 
-def sanitize_config(_config: BitnetConfig) -> MinimalBitnetConfig:
-    return MinimalBitnetConfig(
-        attention_bias=_config.attention_bias,
-        hidden_size=_config.hidden_size,
-        input_bits=_config.input_bits,
-        intermediate_size=_config.intermediate_size,
-        max_position_embeddings=_config.max_position_embeddings,
-        num_attention_heads=_config.num_attention_heads,
-        num_key_value_heads=_config.num_key_value_heads,
-        pad_token_id=_config.pad_token_id,
-        rms_norm_eps=_config.rms_norm_eps,
-        rope_theta=_config.rope_theta,
-        weight_bits=_config.weight_bits,
-        use_cache=_config.use_cache,
-        output_hidden_states=_config.output_hidden_states,
-        output_attentions=_config.output_attentions,
-        use_return_dict=_config.use_return_dict,
-    )
-
 def clamp(arr, min=None, max=None):
     if not min:
         return mx.minimum(arr, max)
@@ -123,10 +104,6 @@ def activation_quant(x, num_bits=8):
     Qn = -2 ** (num_bits - 1)
     Qp = 2 ** (num_bits - 1) - 1
     s = Qp / mx.maximum(x.abs().max(axis=-1, keepdims=True), 1e-5)
-    # print("Qn", Qn)
-    # print("Qp", Qp)
-    # print("s", s)
-    # print("x*s", x*s)
     result = clamp((x * s).round(), min=Qn, max=Qp) / s
     return result.astype(dtype)
 
@@ -147,17 +124,12 @@ class BitLinear(nn.Linear):
         self.input_bits = input_bits
 
     def forward(self, input):
-        # print("[mlx] input", input)
         quant_input = activation_quant(input, self.input_bits)
-        # print("[mlx] quant_input", quant_input)
         quant_weight = weight_quant(self.weight, self.weight_bits)
-        # print("[mlx] quant_weight", quant_weight)
 
         out = quant_input @ quant_weight.T
-        # print("[mlx] out", out)
         if hasattr(self, 'bias') and self.bias is not None:
             out += mx.broadcast_to(self.bias.reshape((1, -1)), out.shape)
-        # print("[mlx] out after bias", out)
 
         return out
 
@@ -172,12 +144,11 @@ class BitnetRMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
-        # input_dtype = hidden_states.dtype
-        # hidden_states = hidden_states.to(mx.float32)
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.astype(mx.float32)
         variance = hidden_states.square().mean(axis=-1, keepdims=True)
         hidden_states = hidden_states * mx.rsqrt(variance + self.variance_epsilon)
-        # return self.weight * hidden_states.to(input_dtype)
-        return self.weight * hidden_states
+        return self.weight * hidden_states.astype(input_dtype)
 
 
 
@@ -287,9 +258,7 @@ class BitnetMLP(nn.Module):
     def forward(self, x):
         x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
         x = self.ffn_layernorm.forward(x)
-        # print("[mlx] mlp x_2", x)
         x = self.down_proj.forward(x)
-        # print("[mlx] mlp x_3", x)
         return x
 
 
@@ -387,8 +356,8 @@ class BitnetAttention(nn.Module):
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            # cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            # key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
             key_cache, value_cache = past_key_value
             key_states = mx.concatenate((key_cache, key_states), axis=2)
@@ -485,18 +454,13 @@ class BitnetDecoderLayer(nn.Module):
             cache_position=cache_position,
             **kwargs,
         )
-        # print("[mlx] hidden_states_2", hidden_states)
         hidden_states = residual + hidden_states
-        # print("[mlx] hidden_states_3", hidden_states)
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm.forward(hidden_states)
-        # print("[mlx] hidden_states_4", hidden_states)
         hidden_states = self.mlp.forward(hidden_states)
-        # print("[mlx] hidden_states_5", hidden_states)
         hidden_states = residual + hidden_states
-        # print("[mlx] hidden_states_6", hidden_states)
 
         outputs = (hidden_states,)
 
@@ -525,7 +489,7 @@ class BitnetModel(nn.Module):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = [
-            BitnetDecoderLayer(sanitize_config(config), layer_idx) for layer_idx in range(config.num_hidden_layers)
+            BitnetDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)
         ]
         self.norm = BitnetRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -564,14 +528,8 @@ class BitnetModel(nn.Module):
             inputs_embeds = self.embed_tokens(input_ids)
 
         past_seen_tokens = 0
-        # if use_cache:  # kept for BC (cache positions)
-        #     if not isinstance(past_key_values, StaticCache):
-        #         past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-        #         past_seen_tokens = past_key_values.get_seq_length()
 
         if cache_position is None:
-            # if isinstance(past_key_values, StaticCache):
-            #     raise ValueError("cache_position is a required argument when using StaticCache.")
             cache_position = mx.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1]
             )
@@ -593,14 +551,6 @@ class BitnetModel(nn.Module):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # print("before hidden_states", hidden_states)
-            # print("before attention_mask", causal_mask)
-            # print("before position_ids", position_ids)
-            # print("before past_key_value", past_key_values)
-            # print("before output_attentions", output_attentions)
-            # print("before use_cache", use_cache)
-            # print("before cache_position", cache_position)
-
             layer_outputs = decoder_layer.forward(
                 hidden_states,
                 attention_mask=causal_mask,
@@ -611,7 +561,6 @@ class BitnetModel(nn.Module):
                 cache_position=cache_position,
             )
 
-            # print("layer_outputs", layer_outputs)
             hidden_states = layer_outputs[0]
 
             if use_cache:
@@ -639,57 +588,6 @@ class BitnetModel(nn.Module):
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
-
-    def generate(self, x, temp=1.0):
-        def sample(logits):
-            if temp == 0:
-                return mx.argmax(logits, axis=-1)
-            else:
-                return mx.random.categorical(logits * (1 / temp))
-
-        cache = []
-
-        # Make an additive causal mask. We will need that to process the prompt.
-        mask = nn.MultiHeadAttention.create_additive_causal_mask(x.shape[1])
-        mask = mask.astype(self.embed_tokens.weight.dtype)
-
-        # First we process the prompt x the same was as in __call__ but
-        # save the caches in cache
-        x = self.embed_tokens(x)
-        for l in self.layers:
-            x, c = l.forward(x, mask=mask)
-            # We store the per layer cache in a simple python list
-            cache.append(c)
-        x = self.norm(x)
-        # We only care about the last logits that generate the next token
-        y = self.output(x[:, -1])
-        y = sample(y)
-
-        # y now has size [1]
-        # Since MLX is lazily evaluated nothing is computed yet.
-        # Calling y.item() would force the computation to happen at
-        # this point but we can also choose not to do that and let the
-        # user choose when to start the computation.
-        yield y
-
-        # Now we parsed the prompt and generated the first token we
-        # need to feed it back into the model and loop to generate the
-        # rest.
-        while True:
-            # Unsqueezing the last dimension to add a sequence length
-            # dimension of 1
-            x = y[:, None]
-
-            x = self.embed_tokens(x)
-            for i in range(len(cache)):
-                # We are overwriting the arrays in the cache list. When
-                # the computation will happen, MLX will be discarding the
-                # old cache the moment it is not needed anymore.
-                x, cache[i] = self.layers[i](x, mask=None, cache=cache[i])
-            x = self.norm(x)
-            y = sample(self.output(x[:, -1]))
-
-            yield y
 
 
     # TODO: As of torch==2.2.0, the `attention_mask` passed to the model in `generate` is 2D and of dynamic length even when the static
@@ -740,13 +638,14 @@ class BitnetForCausalLM(nn.Module):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__()
+        self.config = config
         self.model = BitnetModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -806,7 +705,7 @@ class BitnetForCausalLM(nn.Module):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
+        outputs = self.model.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -821,7 +720,7 @@ class BitnetForCausalLM(nn.Module):
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
-        logits = logits.float()
+        logits = logits.astype(mx.float32)
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -833,6 +732,44 @@ class BitnetForCausalLM(nn.Module):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+    def generate(self, input_ids, attention_mask, temp=1.0):
+        def sample(logits):
+            if temp == 0:
+                return mx.argmax(logits, axis=-1)
+            else:
+                return mx.random.categorical(logits * (1 / temp))
+
+        batch_size, cur_len = input_ids.shape
+        cache_position = mx.arange(cur_len)
+        max_tokens = 50
+
+        for _ in range(max_tokens):
+            model_inputs = self.prepare_inputs_for_generation(input_ids, use_cache=True, attention_mask=attention_mask, cache_position=cache_position)
+
+            lm_output = self.forward(
+                **model_inputs,
+                return_dict=True,
+                output_attentions=True,
+                output_hidden_states=True,
+            )
+
+            next_token_logits = lm_output.logits[:, -1, :]
+
+            next_tokens = sample(next_token_logits)
+            yield next_tokens
+
+            # next token
+            ## update attention mask
+            attention_mask = mx.concatenate(
+                [attention_mask, mx.ones((attention_mask.shape[0], 1), dtype=attention_mask.dtype)],
+                axis=-1
+            )
+
+            input_ids = mx.concatenate([input_ids, next_tokens[:, None]], axis=-1)
+
+            if cache_position is not None:
+                cache_position = cache_position[-1:] + 1
 
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, cache_position=None, **kwargs
@@ -872,7 +809,7 @@ class BitnetForCausalLM(nn.Module):
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids = attention_mask.astype(mx.int64).cumsum(-1) - 1
             position_ids = mx.where(attention_mask == 0, mx.ones_like(position_ids), position_ids)
             if past_key_values:
                 position_ids = position_ids[:, -input_ids.shape[1] :]
@@ -881,10 +818,7 @@ class BitnetForCausalLM(nn.Module):
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:
-            # The `contiguous()` here is necessary to have a static stride during decoding. torchdynamo otherwise
-            # recompiles graphs as the stride of the inputs is a guard. Ref: https://github.com/huggingface/transformers/pull/29114
-            # TODO: use `next_tokens` directly instead.
-            model_inputs = {"input_ids": input_ids.contiguous()}
+            model_inputs = {"input_ids": input_ids}
 
         input_length = position_ids.shape[-1] if position_ids is not None else input_ids.shape[-1]
         if cache_position is None:
@@ -915,48 +849,25 @@ class BitnetForCausalLM(nn.Module):
             )
         return reordered_past
 
-def tic():
-    return time.time()
 
-
-def toc(msg, start):
-    end = time.time()
-    return f"[INFO] {msg}: {end - start:.3f} s"
-
-def generate(model, tokenizer, args):
-    # input("Press enter to start generation")
-    # print("------")
-    print(args.prompt)
-    x = mx.array([[tokenizer.bos_token_id] + tokenizer.encode(args.prompt)])
-    skip = 0
-    prompt_processing = None
-    tokens = []
-    start = tic()
-    for token in model.generate(x, args.temp):
-        tokens.append(token)
-
-        if len(tokens) == 1:
-            # Actually perform the computation to measure the prompt processing time
-            mx.eval(token)
-            prompt_processing = toc("Prompt processing", start)
-
-        if len(tokens) >= args.max_tokens:
-            break
-
-        elif (len(tokens) % args.write_every) == 0:
-            # It is perfectly ok to eval things we have already eval-ed.
-            mx.eval(tokens)
-            s = tokenizer.decode([t.item() for t in tokens])
-            print(s[skip:], end="", flush=True)
-            skip = len(s)
-
-    mx.eval(tokens)
-    full_gen = toc("Full generation", start)
-    s = tokenizer.decode([t.item() for t in tokens])
-    print(s[skip:], flush=True)
-    print("------")
-    print(prompt_processing)
-    print(full_gen)
+def sanitize_config(_config: BitnetConfig) -> MinimalBitnetConfig:
+    return MinimalBitnetConfig(
+        attention_bias=_config.attention_bias,
+        hidden_size=_config.hidden_size,
+        input_bits=_config.input_bits,
+        intermediate_size=_config.intermediate_size,
+        max_position_embeddings=_config.max_position_embeddings,
+        num_attention_heads=_config.num_attention_heads,
+        num_key_value_heads=_config.num_key_value_heads,
+        pad_token_id=_config.pad_token_id,
+        rms_norm_eps=_config.rms_norm_eps,
+        rope_theta=_config.rope_theta,
+        weight_bits=_config.weight_bits,
+        use_cache=_config.use_cache,
+        output_hidden_states=_config.output_hidden_states,
+        output_attentions=_config.output_attentions,
+        use_return_dict=_config.use_return_dict,
+    )
 
 def load_model(model_name: str, dtype: str = "float16"):
     config = BitnetConfig.from_pretrained(model_name)
@@ -970,48 +881,14 @@ def load_model(model_name: str, dtype: str = "float16"):
     mx.eval(model.parameters())
     return model, BitnetTokenizer.from_pretrained(model_name)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="T5 Inference script")
-    parser.add_argument(
-        "--model",
-        type=str,
-        help="Name of the bitnet model.",
-        default="1bitLLM/bitnet_b1_58-large",
-    )
-    parser.add_argument(
-        "--prompt",
-        help="",
-        default="translate English to German: That is good.",
-    )
-    parser.add_argument(
-        "--max-tokens",
-        "-m",
-        type=int,
-        default=100,
-        help="Maximum number of tokens to generate",
-    )
-    parser.add_argument(
-        "--temp",
-        help="The sampling temperature.",
-        type=float,
-        default=0.0,
-    )
-    parser.add_argument(
-        "--dtype",
-        help="The model data type.",
-        type=str,
-        choices=["float16", "bfloat16", "float32"],
-        default="bfloat16",
-    )
-
-    parser.add_argument("--seed", type=int, default=0, help="The PRNG seed")
-    args = parser.parse_args()
-
-    mx.random.seed(args.seed)
-
-    model, tokenizer = load_model(args.model, dtype=args.dtype)
-
-    print("[INFO] Generating with Bitnet...", flush=True)
-    print("Input: ", args.prompt, flush=True)
-
-    # generate(model, tokenizer, args)
+def load_causal_model(model_name: str, dtype: str = "float16"):
+    config = BitnetConfig.from_pretrained(model_name)
+    dtype = getattr(mx, dtype)
+    model = BitnetForCausalLM(sanitize_config(config))
+    file_name = model_name.replace("/", "-")
+    weights = mx.load(f"{file_name}.npz")
+    weights = tree_unflatten(list(weights.items()))
+    weights = tree_map(lambda p: p.astype(dtype), weights)
+    model.update(weights)
+    mx.eval(model.parameters())
+    return model, BitnetTokenizer.from_pretrained(model_name)

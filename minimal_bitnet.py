@@ -302,8 +302,8 @@ class BitnetAttention(nn.Module):
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            # cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            # key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
             key_cache, value_cache = past_key_value
             key_states = torch.cat((key_cache, key_states), axis=2)
@@ -399,7 +399,6 @@ class BitnetDecoderLayer(nn.Module):
             cache_position=cache_position,
             **kwargs,
         )
-        print("[torch] hidden_states_2", hidden_states)
         hidden_states = residual + hidden_states
 
         # Fully Connected
@@ -484,17 +483,9 @@ class BitnetModel(BitnetPreTrainedModel):
             inputs_embeds = self.embed_tokens(input_ids)
 
         past_seen_tokens = 0
-        # if use_cache:  # kept for BC (cache positions)
-        #     if not isinstance(past_key_values, StaticCache):
-        #         past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-        #         past_seen_tokens = past_key_values.get_seq_length()
 
         if cache_position is None:
-            # if isinstance(past_key_values, StaticCache):
-            #     raise ValueError("cache_position is a required argument when using StaticCache.")
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
+            raise ValueError("cache_position is a required argument when using StaticCache.")
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)

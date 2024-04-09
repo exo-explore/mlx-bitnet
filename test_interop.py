@@ -11,14 +11,17 @@ from mlx_bitnet import BitnetMLP as MLXBitnetMLP
 from mlx_bitnet import BitnetAttention as MLXBitnetAttention
 from mlx_bitnet import MinimalBitnetConfig
 from mlx_bitnet import BitnetDecoderLayer as MLXBitnetDecoderLayer
-from mlx_bitnet import load_model
+from mlx_bitnet import load_model, load_causal_model
 from mlx_bitnet import BitnetModel as MLXBitnetModel
+from mlx_bitnet import BitnetForCausalLM as MLXBitnetForCausalLM
+from mlx_bitnet import BitnetTokenizer
 from minimal_bitnet import BitLinear as TorchBitLinear
 from minimal_bitnet import BitnetRMSNorm as TorchBitnetRMSNorm
 from minimal_bitnet import BitnetRotaryEmbedding as TorchBitnetRotaryEmbedding
 from minimal_bitnet import BitnetMLP as TorchBitnetMLP
 from minimal_bitnet import BitnetAttention as TorchBitnetAttention
 from minimal_bitnet import BitnetModel as TorchBitnetModel
+from minimal_bitnet import BitnetForCausalLM as TorchBitnetForCausalLM
 from minimal_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
 from transformers.activations import silu as torch_silu
 
@@ -308,6 +311,7 @@ class TestBitnetAttentionInterop(unittest.TestCase):
             mlx_o_proj_weight = np.array(mlx_layer.self_attn.o_proj.weight)
             self.assertTrue(np.allclose(torch_o_proj_weight, mlx_o_proj_weight, atol=1e-6), f"Layer {layer_index} self attention o_proj weights do not match.")
 
+    @unittest.skip("skip this test normally because its slow")
     def test_bitnet_decoder_layer_interop(self):
         layer_norm_eps = 1e-6
 
@@ -369,7 +373,7 @@ class TestBitnetAttentionInterop(unittest.TestCase):
         torch_output = torch_decoder_layer.forward(torch_input_tensor, attention_mask=torch_attention_mask, position_ids=torch_position_ids)
 
         # Check if the outputs are close enough
-        self.assertTrue(torch.allclose(torch.tensor(np.array(mlx_output)), torch_output[0].detach(), atol=0.05), "Decoder layer outputs do not match.")
+        self.assertTrue(torch.allclose(torch.tensor(np.array(mlx_output)), torch_output[0].detach(), atol=0.01), "Decoder layer outputs do not match.")
 
 
     @unittest.skip("skip this test normally because its slow")
@@ -396,6 +400,103 @@ class TestBitnetAttentionInterop(unittest.TestCase):
 
         # Check if the outputs are close enough
         self.assertTrue(torch.allclose(torch_output[0], torch.tensor(np.array(mlx_output[0])), atol=1e-4), "Model inferences do not match.")
+
+    @unittest.skip("skip this test normally because its slow")
+    def test_generate_words_from_torch_bitnet_model(self):
+        model_name = "1bitLLM/bitnet_b1_58-large"
+        torch_model = TorchBitnetForCausalLM.from_pretrained(model_name)
+
+        print("[torch] lm head weight", torch_model.lm_head.weight)
+
+        # Prepare input
+        prompt = "Capital of India is"
+        tokenizer = BitnetTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        input_ids = inputs.input_ids
+        attention_mask = inputs.attention_mask
+        print(inputs)
+
+        # Generate tokens using torch_model.generate
+        generated_token_ids = torch_model.generate(input_ids, attention_mask=attention_mask, max_length=20)
+
+        # Convert generated token IDs to words
+        generated_words_list = tokenizer.decode(generated_token_ids[0], skip_special_tokens=True)
+
+        # Check if words were generated
+        self.assertTrue(len(generated_words_list) > 0, "No new words were generated.")
+        print("Generated words:", generated_words_list)
+
+    @unittest.skip("skip this test normally because its slow")
+    def test_single_inference_from_mlx_bitnet_model(self):
+        model_name = "1bitLLM/bitnet_b1_58-large"
+        torch_model = TorchBitnetForCausalLM.from_pretrained(model_name)
+        mlx_model, _ = load_causal_model(model_name)
+        mlx_model.lm_head.load_weights([
+            ("weight", mx.array(torch_model.lm_head.weight.detach().numpy()))
+        ])
+
+        print("[mlx] lm head weight", mlx_model.lm_head.weight)
+
+        # Prepare input
+        prompt = "Capital of India is"
+        tokenizer = BitnetTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        print("inputs", inputs)
+        input_ids = mx.array(inputs.input_ids.numpy())
+        attention_mask = mx.array(inputs.attention_mask.numpy())
+
+        # Generate a single token using mlx_model.generate
+        generated = mlx_model.forward(input_ids, attention_mask=attention_mask)
+
+        print("generated", generated)
+
+        # Convert logits to probabilities
+        probabilities = mx.softmax(generated.logits, axis=-1)
+
+        # Get the index of the maximum probability to find the next token ID
+        next_token_ids = mx.argmax(probabilities, axis=-1)
+
+        print("Next predicted token ID:", next_token_ids)
+        print("Next predicted token:", tokenizer.decode(np.array(next_token_ids).tolist()[0]))  # Decode using the numpy array
+
+    @unittest.skip("skip this test normally because its slow")
+    def test_single_inference_with_generate_from_mlx_bitnet_model(self):
+        model_name = "1bitLLM/bitnet_b1_58-large"
+        torch_model = TorchBitnetForCausalLM.from_pretrained(model_name)
+
+        mlx_model, _ = load_causal_model(model_name)
+        mlx_model.lm_head.load_weights([
+            ("weight", mx.array(torch_model.lm_head.weight.detach().numpy()))
+        ])
+        tokenizer = BitnetTokenizer.from_pretrained(model_name)
+
+        prompt = "The capital of Scotland is "
+        max_tokens = 50
+        temp = 1.0
+
+        inputs = tokenizer(prompt, return_tensors="pt")
+        input_ids = mx.array(inputs.input_ids.numpy())
+        attention_mask = mx.array(inputs.attention_mask.numpy())
+        tokens = []
+        for token in mlx_model.generate(input_ids, attention_mask, temp):
+            tokens.append(token)
+
+            if len(tokens) == 1:
+                # Actually perform the computation to measure the prompt processing time
+                mx.eval(token)
+
+            if len(tokens) >= max_tokens:
+                break
+
+            # It is perfectly ok to eval things we have already eval-ed.
+            mx.eval(tokens)
+            s = tokenizer.decode([t.item() for t in tokens])
+            print(s)
+            # print(s, end="", flush=True)
+
+        mx.eval(tokens)
+        s = tokenizer.decode([t.item() for t in tokens])
+        print(s, flush=True)
 
 
 
