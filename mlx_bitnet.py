@@ -49,34 +49,22 @@ from dataclasses import dataclass
 
 @dataclass
 class MinimalBitnetConfig:
-    # _name_or_path: str = "1bitLLM/bitnet_b1_58-xl"
-    # architectures: list = ("BitnetForCausalLM",)
     attention_bias: bool = False
-    # attention_dropout: float = 0.0
     bos_token_id: int = 1
     eos_token_id: int = 2
-    # hidden_act: str = "silu"
     hidden_size: int = 2048
-    # initializer_range: float = 0.02
     input_bits: int = 8
     intermediate_size: int = 5460
     max_position_embeddings: int = 2048
-    # model_type: str = "llama"
     num_attention_heads: int = 32
     num_hidden_layers: int = 24
     num_key_value_heads: int = 32
     pad_token_id: int = 32000
-    # pretraining_tp: int = 1
     rms_norm_eps: float = 1e-05
-    # rope_scaling: None = None
     rope_theta: float = 10000.0
-    # tie_word_embeddings: bool = True
-    # torch_dtype: str = "float16"
-    # transformers_version: str = "4.39.0"
     use_cache: bool = True
     vocab_size: int = 32002
     weight_bits: int = 1
-    # attn_implementation: str = "eager"
     output_hidden_states: bool = False
     output_attentions: bool = False
     use_return_dict: bool = True
