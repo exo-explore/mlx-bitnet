@@ -84,6 +84,6 @@ This shows that the perplexity is better than Llama, while being faster and more
 - 🚧 **In Progress:** Optimised kernels for matrix multiplication specifically for 1.58 Bit weights
 - 🚧 **In Progress:** Python training
 - 🚧 **In Progress:** Inference in Swift for iPhone/iPad
-- 🚧 **In Progress:** Demo app showcasing pareto improvement, especially on iPhone
-- 🚧 **In Progress:** Fine-tuning in Swift for iPhone/iPad
-- 🚧 **In Progress:** Efficient storage format for 1.58 Bit Weights
+- ⬜ **Not Started:** Demo app showcasing pareto improvement, especially on iPhone
+- ⬜ **Not Started:** Fine-tuning in Swift for iPhone/iPad
+- ⬜ **Not Started:** Efficient storage format for 1.58 Bit Weights
