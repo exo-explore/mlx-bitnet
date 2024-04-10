@@ -5,8 +5,7 @@ import random
 import time
 from transformers import GenerationConfig
 
-from minimal_bitnet import BitnetForCausalLM
-# from modeling_bitnet import BitnetForCausalLM
+from torch_bitnet import BitnetForCausalLM
 from tokenization_bitnet import BitnetTokenizer 
 
 torch.set_grad_enabled(False)
