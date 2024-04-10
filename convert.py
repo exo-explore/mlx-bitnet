@@ -1,5 +1,5 @@
 import numpy as np
-from minimal_bitnet import BitnetForCausalLM
+from torch_bitnet import BitnetForCausalLM
 
 SHARED_REPLACEMENT_PATTERNS = [
     (".block.", ".layers."),
