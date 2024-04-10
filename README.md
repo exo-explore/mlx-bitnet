@@ -2,12 +2,11 @@
 
 ![BitNet 1.58bit Weights](images/BitNet-1.58bit-Weights.png)
 
-MLX implementation of the 1.58 Bit LLM from the Microsoft Research paper "The Era of 1-bit LLMs:
-All Large Language Models are in 1.58 Bits".
+Implementation of the 1.58 Bit LLM from the Microsoft Research paper "The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits" on Apple Silicon using MLX.
 
 [Paper link](https://arxiv.org/pdf/2402.17764.pdf)
 
-*Note: MLX is an array framework for machine learning research on Apple silicon. As a result, this model is optimised for Apple Silicon. [Repo link](https://github.com/ml-explore/mlx)*
+*Note: MLX is an array framework for machine learning research on Apple silicon. This model implementation uses MLX. [Repo link](https://github.com/ml-explore/mlx)*
 
 ## OG 1 Bit BitNet
 
@@ -25,10 +24,15 @@ $$
 
 The results of this paper were astounding, almost feeling too good to be true, with the research team reporting a **Pareto improvement**, i.e. better in every dimension!
 
+Some highlights:
+
+![BitNet Results](images/BitNet-Results-Perplexity-And-Cost.png)
+
+This shows that the perplexity is better than Llama, while being faster and more memory efficient!
 
 ## Acknowledgements
 
-- 1bitLLM on huggingface for releasing the model weights that we are using: https://huggingface.co/NousResearch
+- `1bitLLM` on huggingface for releasing the PyTorch model and model weights that we are using: https://huggingface.co/1bitLLM
 - [Nous Research](https://huggingface.co/NousResearch) for [training](https://huggingface.co/NousResearch/OLMo-Bitnet-1B) a 1.58 Bit LLM and independently confirming some preliminary results
 - Awni Hannun and all contributors to [MLX](https://github.com/ml-explore/mlx)
 
@@ -40,3 +44,4 @@ The results of this paper were astounding, almost feeling too good to be true, w
 - 🚧 **In Progress:** Python training
 - 🚧 **In Progress:** Inference in Swift for iPhone/iPad
 - 🚧 **In Progress:** Fine-tuning in Swift for iPhone/iPad
+- 🚧 **In Progress:** Efficient storage format for 1.58 Bit Weights
