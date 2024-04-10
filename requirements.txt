@@ -1,0 +1,5 @@
+mlx>=0.9.0
+sentencepiece
+torch
+numpy
+transformers
