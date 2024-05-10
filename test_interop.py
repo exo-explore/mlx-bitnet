@@ -4,6 +4,7 @@ import mlx.nn as mx_nn
 import torch
 from torch import nn as torch_nn
 import numpy as np
+from mlx_bitnet import weight_quant as mlx_weight_quant
 from mlx_bitnet import BitLinear as MLXBitLinear
 from mlx_bitnet import BitnetRMSNorm as MLXBitnetRMSNorm
 from mlx_bitnet import BitnetRotaryEmbedding as MLXBitnetRotaryEmbedding
@@ -15,6 +16,7 @@ from mlx_bitnet import load_model, load_causal_model
 from mlx_bitnet import BitnetModel as MLXBitnetModel
 from mlx_bitnet import BitnetForCausalLM as MLXBitnetForCausalLM
 from mlx_bitnet import BitnetTokenizer
+from torch_bitnet import weight_quant as torch_weight_quant
 from torch_bitnet import BitLinear as TorchBitLinear
 from torch_bitnet import BitnetRMSNorm as TorchBitnetRMSNorm
 from torch_bitnet import BitnetRotaryEmbedding as TorchBitnetRotaryEmbedding
@@ -24,6 +26,7 @@ from torch_bitnet import BitnetModel as TorchBitnetModel
 from torch_bitnet import BitnetForCausalLM as TorchBitnetForCausalLM
 from torch_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
 from transformers.activations import silu as torch_silu
+from training.bit_linear import weight_quant as bit_linear_weight_quant
 
 class TestBitLinearInterop(unittest.TestCase):
     def setUp(self):
@@ -498,6 +501,16 @@ class TestBitnetAttentionInterop(unittest.TestCase):
         s = tokenizer.decode([t.item() for t in tokens])
         print(s, flush=True)
 
+class TestWeightQuant(unittest.TestCase):
+    def test_weight_quant_values(self):
+        mx.random.seed(1)
+        for _ in range(100):
+            random_weights = mx.random.uniform(-2, 2, shape=(10, 10))  # Generate random weights
+            mlx_quantized_weights = mlx_weight_quant(random_weights, num_bits=1)  # Quantize weights
+            torch_quantized_weights = torch_weight_quant(torch.tensor(np.array(random_weights)), num_bits=1)  # Quantize weights
+            for i in range(len(random_weights)):
+                for j in range(len(random_weights[i])):
+                    self.assertAlmostEqual(mlx_quantized_weights[i][j].item(), torch_quantized_weights[i][j].item(), places=4)
 
 
 
