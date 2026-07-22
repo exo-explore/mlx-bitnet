@@ -26,7 +26,6 @@ from torch_bitnet import BitnetModel as TorchBitnetModel
 from torch_bitnet import BitnetForCausalLM as TorchBitnetForCausalLM
 from torch_bitnet import BitnetDecoderLayer as TorchBitnetDecoderLayer
 from transformers.activations import silu as torch_silu
-from training.bit_linear import weight_quant as bit_linear_weight_quant
 
 class TestBitLinearInterop(unittest.TestCase):
     def setUp(self):
