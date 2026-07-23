@@ -17,8 +17,8 @@ input_ids = mx.array([tokens])
 attention_mask = mx.ones_like(input_ids)
 
 generated = list(tokens)
-decoded_so_far = args.prompt
-print(decoded_so_far, end="", flush=True)
+decoded_so_far = tokenizer.decode(tokens)
+print(args.prompt, end="", flush=True)
 
 for token in model.generate(input_ids, attention_mask, temp=args.temp):
     generated.append(token.item())
