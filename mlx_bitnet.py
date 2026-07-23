@@ -846,6 +846,7 @@ def sanitize_config(_config: BitnetConfig) -> MinimalBitnetConfig:
         intermediate_size=_config.intermediate_size,
         max_position_embeddings=_config.max_position_embeddings,
         num_attention_heads=_config.num_attention_heads,
+        num_hidden_layers=_config.num_hidden_layers,
         num_key_value_heads=_config.num_key_value_heads,
         pad_token_id=_config.pad_token_id,
         rms_norm_eps=_config.rms_norm_eps,
